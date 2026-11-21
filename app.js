@@ -350,6 +350,9 @@ function byDay(matches) {
 }
 const dayHead = (g) => `<h3 class="day">${Number.isFinite(g.ko) ? fDay.format(g.ko) : "ميعاده لسه"}</h3>`;
 
+// a single word longer than 10 letters ("Bournemouth") gets a smaller font so it never breaks mid-word
+const teamCls = (side, name) => `team ${side}${String(name).split(" ").some((w) => w.length > 10) ? " long" : ""}`;
+
 function scoreBox(prefix, rid, m, i, c, disabled) {
   const team = i ? m.a : m.h;
   const cls = "sc" + (c.dirty ? " dirty" : c.saved ? " saved" : "");
@@ -385,7 +388,7 @@ function predictView() {
     const dead = C.isDead(m);
     const tags = (m.dbl ? `<span class="chip dbl">دابل ×2</span>` : "") + (m.st === "POSTPONED" ? `<span class="chip bad">اتأجل</span>` : "") + (dead ? `<span class="chip bad">اتلغى</span>` : "");
     return `<div class="m"><div class="meta"><span>${Number.isFinite(m.ko) ? fTime.format(m.ko) : ""}</span>${tags}</div>
-      <div class="mrow"><div class="team home" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("p", r.id, m, 0, cell(r.id, m.id, 0), dead)}<span class="dash">-</span>${scoreBox("p", r.id, m, 1, cell(r.id, m.id, 1), dead)}</div><div class="team away" lang="en">${esc(m.a)}</div></div></div>`;
+      <div class="mrow"><div class="${teamCls("home", m.h)}" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("p", r.id, m, 0, cell(r.id, m.id, 0), dead)}<span class="dash">-</span>${scoreBox("p", r.id, m, 1, cell(r.id, m.id, 1), dead)}</div><div class="${teamCls("away", m.a)}" lang="en">${esc(m.a)}</div></div></div>`;
   }).join("")).join("");
   return card(`${chips}<div class="card-h"><div><span class="eyebrow">${esc(COMPS[comp].short)} · ${esc(r.label)}</span><h2>توقعاتك</h2></div>${state}</div>
       <p class="muted sm">بتقفل <b>${when(r.lock)}</b> (أول ماتش) · باقي <span data-cd="${r.lock}">${leftText(leftMs)}</span></p>
@@ -492,7 +495,7 @@ function resultMatch(m, preds) {
   }).join("");
   const tags = (m.dbl ? `<span class="chip dbl">دابل ×2</span>` : "") + (live ? `<span class="chip soon">مباشر</span>` : "");
   return `<div class="m"><div class="meta"><span>${Number.isFinite(m.ko) ? fTime.format(m.ko) : ""}</span>${tags}</div>
-    <div class="mrow"><div class="team home" lang="en">${esc(m.h)}</div>${mid}<div class="team away" lang="en">${esc(m.a)}</div></div>
+    <div class="mrow"><div class="${teamCls("home", m.h)}" lang="en">${esc(m.h)}</div>${mid}<div class="${teamCls("away", m.a)}" lang="en">${esc(m.a)}</div></div>
     ${preds ? `<div class="pks">${chips || `<span class="muted sm">محدش توقّع الماتش ده</span>`}</div>` : ""}</div>`;
 }
 
@@ -751,7 +754,7 @@ function roundToolsCard() {
     const c1 = { v: val(`r|${rid}|${m.id}|1`, C.isGoal(m.ag) ? m.ag : ""), dirty: false, saved: false };
     const tags = (m.manual ? `<span class="chip soon">يدوي</span>` : "") + (m.dbl ? `<span class="chip dbl">دابل</span>` : "");
     return `<div class="m"><div class="meta"><span>${Number.isFinite(m.ko) ? esc(when(m.ko)) : ""} · ${esc(statusWord(m))}</span>${tags}</div>
-      <div class="mrow"><div class="team home" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("r", rid, m, 0, c0)}<span class="dash">-</span>${scoreBox("r", rid, m, 1, c1)}</div><div class="team away" lang="en">${esc(m.a)}</div></div>
+      <div class="mrow"><div class="${teamCls("home", m.h)}" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("r", rid, m, 0, c0)}<span class="dash">-</span>${scoreBox("r", rid, m, 1, c1)}</div><div class="${teamCls("away", m.a)}" lang="en">${esc(m.a)}</div></div>
       <div class="actions tight"><button type="button" class="btn sm" data-act="adm-result" data-mid="${esc(m.id)}">سجّل النتيجة</button>
       <button type="button" class="btn ghost sm" data-act="adm-dbl" data-mid="${esc(m.id)}">${m.dbl ? "شيل الدابل" : "خليه دابل"}</button>
       ${m.manual ? `<button type="button" class="link" data-act="adm-auto" data-mid="${esc(m.id)}">رجّعه تلقائي</button>` : `<button type="button" class="link danger" data-act="adm-cancel" data-mid="${esc(m.id)}">${armed(`cancel:${m.id}`) ? "دوس تاني: الماتش اتلغى" : "اتلغى"}</button>`}</div></div>`;
@@ -766,7 +769,7 @@ function roundToolsCard() {
       const pv = Array.isArray(prev[m.id]) ? prev[m.id] : [];
       const c0 = { v: val(`f|${rid}|${m.id}|0`, C.isGoal(pv[0]) ? pv[0] : ""), dirty: false, saved: false };
       const c1 = { v: val(`f|${rid}|${m.id}|1`, C.isGoal(pv[1]) ? pv[1] : ""), dirty: false, saved: false };
-      return `<div class="m"><div class="mrow"><div class="team home" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("f", rid, m, 0, c0)}<span class="dash">-</span>${scoreBox("f", rid, m, 1, c1)}</div><div class="team away" lang="en">${esc(m.a)}</div></div></div>`;
+      return `<div class="m"><div class="mrow"><div class="${teamCls("home", m.h)}" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("f", rid, m, 0, c0)}<span class="dash">-</span>${scoreBox("f", rid, m, 1, c1)}</div><div class="${teamCls("away", m.a)}" lang="en">${esc(m.a)}</div></div></div>`;
     }).join("")}</div>
     <div class="paste"><label class="eyebrow" for="friend-paste">أو الصق توقعاته</label><textarea class="inp" id="friend-paste" data-k="friend-paste" data-keep rows="4">${esc(S.form["friend-paste"] || "")}</textarea>
       <div class="actions"><button type="button" class="btn ghost sm" data-act="adm-friend-paste">املا</button></div></div>

@@ -206,7 +206,11 @@ export function fdResult(m) {
 }
 
 // football-data's short names that are still too long for a phone screen
-const DISPLAY = { "Wolverhampton": "Wolves", "Brighton Hove": "Brighton", "Bayern München": "Bayern", "Paris Saint-Germain": "PSG" };
+const DISPLAY = {
+  "Wolverhampton": "Wolves", "Brighton Hove": "Brighton", "Leeds United": "Leeds", "Coventry City": "Coventry",
+  "Ipswich Town": "Ipswich", "Hull City": "Hull", "Norwich City": "Norwich", "Swansea City": "Swansea", "Stoke City": "Stoke",
+  "Bayern München": "Bayern", "Paris Saint-Germain": "PSG",
+};
 const display = (t) => { const n = (t && (t.shortName || t.name)) || "؟"; return DISPLAY[n] || n; };
 
 function fdMatch(m) {
