@@ -1,0 +1,41 @@
+name: sync
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install web-push
+        run: |
+          echo '{"private":true}' > package.json
+          npm install --no-save --no-audit --no-fund web-push@^3.6.0
+      - name: Update matches, points and reminders
+        run: node sync.mjs
+        env:
+          FD_TOKEN: ${{ secrets.FD_TOKEN }}
+          ADMIN_NAME: ${{ secrets.ADMIN_NAME }}
+          ADMIN_PASS: ${{ secrets.ADMIN_PASS }}
+          VAPID_PRIVATE: ${{ secrets.VAPID_PRIVATE }}
+      - name: Keep the schedule switched on
+        if: always()
+        continue-on-error: true
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/sync.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
