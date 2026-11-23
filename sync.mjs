@@ -120,7 +120,6 @@ const fWhen = new Intl.DateTimeFormat(LOCALE, { timeZone: C.TZ, weekday: "long",
 const fTime = new Intl.DateTimeFormat(LOCALE, { timeZone: C.TZ, hour: "numeric", minute: "2-digit" });
 const pointsWord = (n) => (n === 1 ? "نقطة واحدة" : n === 2 ? "نقطتين" : n >= 3 && n <= 10 ? `${n} نقط` : `${n} نقطة`);
 const known = (m) => m.h && m.h !== "؟" && m.a && m.a !== "؟";
-const settled = (r) => r.matches.every((m) => C.isFinal(m) || C.isDead(m) || m.st === "POSTPONED");
 // Firestore may hand fields back in any order, so compare with keys sorted at every level.
 const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object"
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
@@ -203,7 +202,7 @@ export async function run({ env, fetchFn = fetch, sendPush = null, now = Date.no
     // 5. reminders and round results
     const live = [...rounds.values()].filter((r) => !skipped.has(r.id) && Array.isArray(r.matches) && r.matches.length && COMPS[r.comp]);
     const due = live.map((r) => ({ r, kind: C.reminderDue(r, now) })).filter((x) => x.kind && x.r.matches.every(known));
-    const finished = live.filter((r) => r.lock && now >= r.lock && !(r.rem && r.rem.res) && settled(r) && r.matches.some(C.isFinal));
+    const finished = live.filter((r) => r.lock && now >= r.lock && !(r.rem && r.rem.res) && C.roundSettled(r) && r.matches.some(C.isFinal));
     if (due.length || finished.length) {
       const players = Object.fromEntries((await fs.list("players")).map((d) => [d.id, d.data]));
       const pushes = Object.fromEntries((await fs.list("push")).map((d) => [d.id, d.data]));
@@ -247,15 +246,21 @@ export async function run({ env, fetchFn = fetch, sendPush = null, now = Date.no
         const cfg = COMPS[r.comp];
         const lastKo = Math.max(...r.matches.map((m) => m.ko).filter(Number.isFinite));
         let sent = 0;
-        if (now - lastKo < 3 * DAY) {
-          const table = C.standings(players, [...rounds.values()].filter((x) => x.comp === r.comp), r.comp);
+        if (now - lastKo < 3 * DAY && Object.keys(r.points || {}).length) {
+          const compRounds = [...rounds.values()].filter((x) => x.comp === r.comp);
+          const table = C.standings(players, compRounds, r.comp);
+          const top = C.roundTop(r.points || {});
+          const rocket = C.roundRocket(players, compRounds, r.comp, r.id);
+          const nm = (pids) => pids.map((pid) => (players[pid] && players[pid].name) || "؟").join(" و");
+          const awards = [top ? `⭐ النجم: ${nm(top.pids)} (${pointsWord(top.p)})` : "", rocket ? `🚀 الصاروخ: ${nm(rocket.pids)} (+${rocket.up})` : ""].filter(Boolean).join(" · ");
           for (const [pid, p] of Object.entries(players)) {
+            if (!p.uid || (pushes[pid] && pushes[pid].results === false)) continue;
             const mine = r.points && r.points[pid];
-            if (!p.uid || !mine || (pushes[pid] && pushes[pid].results === false)) continue;
             const row = table.rows.find((x) => x.pid === pid);
+            const me = mine ? `جبت ${pointsWord(mine.p)}${mine.x ? ` (${mine.x} مظبوطة)` : ""}. انت رقم ${row ? row.rank : "؟"} من ${table.rows.length}.` : "ما توقعتش الجولة دي.";
             sent += await notify(pid, {
               title: `${cfg.short}: ${r.label} خلصت`,
-              body: `جبت ${pointsWord(mine.p)}${mine.x ? ` (${mine.x} مظبوطة)` : ""}. انت رقم ${row ? row.rank : "؟"} من ${table.rows.length}.`,
+              body: awards ? `${awards}\n${me}` : me,
               url: `./?tab=results&comp=${r.comp}`,
               tag: `res-${r.id}`,
             });

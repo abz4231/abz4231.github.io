@@ -56,15 +56,18 @@ export const isDead = (m) => m && (m.st === "CANCELLED" || m.st === "AWARDED_VOI
 
 // Points of every player for one round: p = points (doubles count twice), x = exact scores, o = right outcomes.
 export function roundPoints(round, preds) {
+  const adj = round.adj || {};
   const out = {};
   for (const [pid, pr] of Object.entries(preds || {})) {
     const picks = (pr && pr.picks) || {};
+    const a = adj[pid] || {};                       // late entry: matches that don't count, no double
+    const skip = new Set((a.skip || []).map(String));
     let p = 0, x = 0, o = 0;
     for (const m of round.matches || []) {
-      if (!isFinal(m)) continue;
+      if (!isFinal(m) || skip.has(String(m.id))) continue;
       const s = score(picks[m.id], m);
       if (s == null) continue;
-      p += s * (m.dbl ? 2 : 1);
+      p += s * (m.dbl && !a.noDbl ? 2 : 1);
       if (s === 3) x++;
       if (s >= 1) o++;
     }
@@ -73,34 +76,99 @@ export function roundPoints(round, preds) {
   return out;
 }
 
-// Table for one competition: starting points plus every round's points. Ties broken by exact scores.
-export function standings(players, rounds, comp) {
+// Nothing left in the round can change: every match finished, cancelled or postponed.
+export const roundSettled = (r) => !!(r && (r.matches || []).length)
+  && r.matches.every((m) => isFinal(m) || isDead(m) || m.st === "POSTPONED");
+
+// The round's best: most points, then most exact scores; equal on both is shared. Nobody if nobody scored.
+export function roundTop(points) {
+  let best = null;
+  for (const [pid, v] of Object.entries(points || {})) {
+    if (!v || !(v.p > 0)) continue;
+    if (!best || v.p > best.p || (v.p === best.p && v.x > best.x)) best = { p: v.p, x: v.x || 0, pids: [pid] };
+    else if (v.p === best.p && v.x === best.x) best.pids.push(pid);
+  }
+  return best;
+}
+
+// The rarest exact score of the round: fewest people got it, then the most goals.
+export function bestHit(round, preds) {
+  const adj = round.adj || {};
+  let best = null;
+  for (const m of round.matches || []) {
+    if (!isFinal(m)) continue;
+    const pids = Object.entries(preds || {}).filter(([pid, pr]) => {
+      const skip = (adj[pid] && adj[pid].skip || []).map(String);
+      return !skip.includes(String(m.id)) && score(pr && pr.picks && pr.picks[m.id], m) === 3;
+    }).map(([pid]) => pid);
+    if (!pids.length) continue;
+    const goals = m.hg + m.ag;
+    if (!best || pids.length < best.pids.length || (pids.length === best.pids.length && goals > best.goals)) best = { mid: m.id, m, pids, goals };
+  }
+  return best;
+}
+
+// League table: points, then exact scores, then stars (times someone was the round's best).
+function table(players, rounds, comp) {
   const list = Object.entries(players || {}).map(([pid, pl]) => ({
     pid, name: pl.name || "؟", claimed: !!pl.uid,
     p: (pl.start && Number(pl.start[comp])) || 0,
     x: (pl.startX && Number(pl.startX[comp])) || 0,
-    last: null,
+    s: 0, last: null,
   }));
   const byPid = new Map(list.map((r) => [r.pid, r]));
   const done = (rounds || []).filter((r) => r.comp === comp && r.points)
     .sort((a, b) => (a.lock || 0) - (b.lock || 0));
-  for (const r of done) for (const [pid, v] of Object.entries(r.points)) {
-    const row = byPid.get(pid); if (!row) continue;
-    row.p += v.p || 0; row.x += v.x || 0;
+  for (const r of done) {
+    for (const [pid, v] of Object.entries(r.points)) {
+      const row = byPid.get(pid); if (!row) continue;
+      row.p += v.p || 0; row.x += v.x || 0;
+    }
+    const top = roundSettled(r) ? roundTop(r.points) : null;
+    if (top) for (const pid of top.pids) if (byPid.has(pid)) byPid.get(pid).s++;
   }
   const lastR = done.filter((r) => Object.keys(r.points).length).pop();
   if (lastR) for (const row of list) row.last = lastR.points[row.pid] ? lastR.points[row.pid].p : 0;
-  list.sort((a, b) => b.p - a.p || b.x - a.x || a.name.localeCompare(b.name, "ar"));
+  list.sort((a, b) => b.p - a.p || b.x - a.x || b.s - a.s || a.name.localeCompare(b.name, "ar"));
   let rank = 0;
   list.forEach((row, i) => {
     const prev = list[i - 1];
-    rank = prev && prev.p === row.p && prev.x === row.x ? rank : i + 1;
+    rank = prev && prev.p === row.p && prev.x === row.x && prev.s === row.s ? rank : i + 1;
     row.rank = rank;
   });
-  return { rows: list, lastLabel: lastR ? lastR.label : null };
+  return { rows: list, lastLabel: lastR ? lastR.label : null, done };
 }
 
-/* ---------- team names and pasted picks ---------- */
+// Who climbed the most places because of this round (only people who played it). Ties: more round points.
+export function roundRocket(players, rounds, comp, rid) {
+  const mine = (rounds || []).filter((r) => r.comp === comp && r.points);
+  const R = mine.find((r) => r.id === rid);
+  if (!R || !roundSettled(R)) return null;
+  const before = new Map(table(players, mine.filter((r) => (r.lock || 0) < (R.lock || 0)), comp).rows.map((r) => [r.pid, r.rank]));
+  const after = table(players, mine.filter((r) => (r.lock || 0) <= (R.lock || 0)), comp).rows;
+  let best = null;
+  for (const row of after) {
+    const pts = R.points[row.pid];
+    if (!pts || !before.has(row.pid)) continue;
+    const up = before.get(row.pid) - row.rank;
+    if (up <= 0) continue;
+    if (!best || up > best.up || (up === best.up && pts.p > best.p)) best = { up, p: pts.p, pids: [row.pid] };
+    else if (up === best.up && pts.p === best.p) best.pids.push(row.pid);
+  }
+  return best;
+}
+
+export function standings(players, rounds, comp) {
+  const t = table(players, rounds, comp);
+  const lastDone = t.done.filter((r) => roundSettled(r) && Object.keys(r.points).length).pop();
+  const top = lastDone ? roundTop(lastDone.points) : null;
+  const rocket = lastDone ? roundRocket(players, rounds, comp, lastDone.id) : null;
+  for (const row of t.rows) {
+    row.star = !!(top && top.pids.includes(row.pid));
+    row.rocket = !!(rocket && rocket.pids.includes(row.pid));
+  }
+  return { rows: t.rows, lastLabel: t.lastLabel, awardsLabel: lastDone ? lastDone.label : null };
+}
 
 const ALIAS = {
   manutd: "manunited", manchesterunited: "manunited", manchesterutd: "manunited", manu: "manunited",

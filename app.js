@@ -33,6 +33,8 @@ const days = (n) => count(n, "يوم", "يومين", "أيام", "يوم");
 const hours = (n) => count(n, "ساعة", "ساعتين", "ساعات", "ساعة");
 const mins = (n) => count(n, "دقيقة", "دقيقتين", "دقايق", "دقيقة");
 const games = (n) => count(n, "ماتش واحد", "ماتشين", "ماتشات", "ماتش");
+const ptsWord = (n) => count(n, "نقطة واحدة", "نقطتين", "نقط", "نقطة");
+const placesWord = (n) => count(n, "مركز واحد", "مركزين", "مراكز", "مركز");
 
 function leftText(ms) {
   const m = Math.max(0, Math.floor(ms / 60000));
@@ -73,7 +75,8 @@ if (url.has("tab") || url.has("comp")) history.replaceState(null, "", location.p
 
 const me = () => (S.pid && S.players[S.pid]) || null;
 const ready = () => !!(S.user && me() && me().uid === S.user.uid);
-const isOwner = () => !!(S.user && S.owner && S.owner.uid === S.user.uid);
+const isMain = () => !!(S.user && S.owner && S.owner.uid === S.user.uid);
+const isOwner = () => isMain() || !!(S.user && S.owner && Array.isArray(S.owner.admins) && S.owner.admins.includes(S.user.uid));
 const nameOf = (pid) => (S.players[pid] && S.players[pid].name) || "لاعب اتمسح";
 const byName = (a, b) => String(a.name).localeCompare(String(b.name), "ar");
 const playerList = () => Object.entries(S.players).map(([pid, p]) => ({ pid, ...p, name: p.name || "؟" })).sort(byName);
@@ -478,25 +481,49 @@ function roundState(r) {
   return `<span class="chip">قفلت</span>`;
 }
 
-function resultMatch(m, preds) {
+function resultMatch(r, m, preds) {
   const fin = C.isFinal(m);
   const live = (m.st === "IN_PLAY" || m.st === "PAUSED") && C.isGoal(m.hg) && C.isGoal(m.ag);
   const mid = fin || live ? `<span class="final${live ? " live" : ""}">${m.hg}<i>-</i>${m.ag}</span>` : `<span class="final wait">${esc(statusWord(m))}</span>`;
-  const mult = m.dbl ? 2 : 1;
+  const adj = r.adj || {};
   const list = Object.entries(preds || {}).filter(([, p]) => p && p.picks && Array.isArray(p.picks[m.id]))
     .sort(([a], [b]) => (a === S.pid ? -1 : b === S.pid ? 1 : nameOf(a).localeCompare(nameOf(b), "ar")));
   const chips = list.map(([pid, p]) => {
     const pk = p.picks[m.id];
-    const s = fin ? C.score(pk, m) : null;
-    const cls = s === 3 ? "p3" : s === 1 ? "p1" : s == null ? "pn" : "";
+    const a = adj[pid] || {};
+    const skipped = (a.skip || []).map(String).includes(String(m.id));
+    const mult = m.dbl && !a.noDbl ? 2 : 1;
+    const s = fin && !skipped ? C.score(pk, m) : null;
+    const cls = skipped ? "skip" : s === 3 ? "p3" : s === 1 ? "p1" : s == null ? "pn" : "";
     const pt = s ? `<span class="pt">+${s * mult}</span>` : "";
     const by = p.by ? `<span class="by" title="سجّلها المشرف">✎</span>` : "";
-    return `<span class="pk ${cls}${pid === S.pid ? " mine" : ""}"><b>${esc(nameOf(pid))}</b><span class="g">${pk[0]}-${pk[1]}</span>${pt}${by}</span>`;
+    return `<span class="pk ${cls}${pid === S.pid ? " mine" : ""}"${skipped ? ` title="ما اتحسبتش: اتسجّلت بعد ما الماتش بدأ"` : ""}><b>${esc(nameOf(pid))}</b><span class="g">${pk[0]}-${pk[1]}</span>${pt}${by}</span>`;
   }).join("");
   const tags = (m.dbl ? `<span class="chip dbl">دابل ×2</span>` : "") + (live ? `<span class="chip soon">مباشر</span>` : "");
   return `<div class="m"><div class="meta"><span>${Number.isFinite(m.ko) ? fTime.format(m.ko) : ""}</span>${tags}</div>
     <div class="mrow"><div class="${teamCls("home", m.h)}" lang="en">${esc(m.h)}</div>${mid}<div class="${teamCls("away", m.a)}" lang="en">${esc(m.a)}</div></div>
     ${preds ? `<div class="pks">${chips || `<span class="muted sm">محدش توقّع الماتش ده</span>`}</div>` : ""}</div>`;
+}
+
+// Star (most points), rocket (biggest climb in the table) and the rarest exact score of a round.
+const names = (pids) => pids.map((pid) => nameOf(pid)).join(" و");
+function roundAwards(r, pts, preds) {
+  const settled = C.roundSettled(r);
+  const top = C.roundTop(pts);
+  const all = S.rounds.map((x) => ({ ...x, points: x.id === r.id ? pts : livePoints(x) }));
+  const rocket = settled ? C.roundRocket(S.players, all, r.comp, r.id) : null;
+  return { settled, top, rocket, hit: C.bestHit(r, preds) };
+}
+function awardsBlock(r, pts, preds) {
+  const { settled, top, rocket, hit } = roundAwards(r, pts, preds);
+  const row = (ic, title, sub) => `<div class="aw-row"><span class="aw-ic" aria-hidden="true">${ic}</span><div><b>${title}</b>${sub ? `<small>${sub}</small>` : ""}</div></div>`;
+  let h = "";
+  if (top) h += settled ? row("⭐", `نجم الجولة: ${esc(names(top.pids))}`, `${ptsWord(top.p)} · ${top.x} مظبوطة`)
+    : row("⏱️", `متصدّر الجولة دلوقتي: ${esc(names(top.pids))}`, `${ptsWord(top.p)} لحد دلوقتي`);
+  if (rocket) h += row("🚀", `صاروخ الجولة: ${esc(names(rocket.pids))}`, `طلع ${placesWord(rocket.up)} في الترتيب`);
+  if (hit) h += row("🎯", `أحلى توقعة: ${esc(names(hit.pids))}`, `<bdi>${hit.m.hg}-${hit.m.ag}</bdi> في <bdi>${esc(hit.m.h)}</bdi> و<bdi>${esc(hit.m.a)}</bdi>${hit.pids.length === 1 ? "، ولوحده" : ""}`);
+  if (settled && top) h += `<div class="actions tight"><button type="button" class="btn sm" data-act="share" data-rid="${esc(r.id)}">ابعت النجم للجروب</button></div>`;
+  return h ? `<div class="awards">${h}</div>` : "";
 }
 
 function roundCard(r, i) {
@@ -510,8 +537,11 @@ function roundCard(r, i) {
     if (!preds) inner = `<p class="muted sm">بنحمّل التوقعات…</p>`;
     else {
       const tot = Object.entries(pts).sort(([a, x], [b, y]) => y.p - x.p || y.x - x.x || nameOf(a).localeCompare(nameOf(b), "ar"));
-      inner = (tot.length ? `<div class="rtot">${tot.map(([pid, v]) => `<span class="tt${pid === S.pid ? " mine" : ""}">${esc(nameOf(pid))} <span class="pt">${v.p}</span></span>`).join("")}</div>` : "")
-        + `<div class="mlist">${byDay(r.matches).map((g) => dayHead(g) + g.items.map((m) => resultMatch(m, preds)).join("")).join("")}</div>`;
+      const adj = r.adj || {};
+      const late = (pid) => (adj[pid] && adj[pid].mark ? `<small class="late">متأخر</small>` : "");
+      inner = awardsBlock(r, pts, preds)
+        + (tot.length ? `<div class="rtot">${tot.map(([pid, v]) => `<span class="tt${pid === S.pid ? " mine" : ""}">${esc(nameOf(pid))}${late(pid)} <span class="pt">${v.p}</span></span>`).join("")}</div>` : "")
+        + `<div class="mlist">${byDay(r.matches).map((g) => dayHead(g) + g.items.map((m) => resultMatch(r, m, preds)).join("")).join("")}</div>`;
     }
   }
   return `<details class="card rres" data-rid="${esc(r.id)}"${open ? " open" : ""}><summary class="card-h"><div><span class="eyebrow">${esc(r.label)} · ${esc(rangeText(r))}</span><h2>${head}</h2></div>${roundState(r)}<span class="chev" aria-hidden="true"></span></summary>${inner}</details>`;
@@ -527,14 +557,16 @@ function resultsView() {
 /* ---------- table ---------- */
 
 function tableView() {
-  const { rows, lastLabel } = C.standings(S.players, S.rounds.map((r) => ({ ...r, points: livePoints(r) })), S.comp);
+  const { rows, lastLabel, awardsLabel } = C.standings(S.players, S.rounds.map((r) => ({ ...r, points: livePoints(r) })), S.comp);
+  const badges = (r) => (r.s ? `<span class="aw${r.star ? " now" : ""}" title="${r.star ? "نجم آخر جولة" : "عدد مرات نجم الجولة"}">⭐${r.s > 1 ? r.s : ""}</span>` : "")
+    + (r.rocket ? `<span class="aw now" title="صاروخ آخر جولة">🚀</span>` : "");
   if (!rows.length) return empty("لسه مفيش لاعيبة", "أول ما الناس تسجّل هيظهر الترتيب هنا.");
   const body = rows.map((r) => `<tr class="${r.rank === 1 ? "lead" : ""}${r.pid === S.pid ? " me" : ""}"><td class="rk">${r.rank}</td>
-    <td class="nm">${esc(r.name)}${r.pid === S.pid ? `<span class="you">انت</span>` : ""}${r.claimed ? "" : "<small>لسه ما سجّلش</small>"}</td>
+    <td class="nm">${esc(r.name)}${badges(r)}${r.pid === S.pid ? `<span class="you">انت</span>` : ""}${r.claimed ? "" : "<small>لسه ما سجّلش</small>"}</td>
     <td class="pts">${r.p}</td><td class="n">${r.x}</td><td class="n">${r.last == null ? "–" : r.last}</td></tr>`).join("");
   return card(`<div class="card-h"><div><span class="eyebrow">${esc(COMPS[S.comp].name)}</span><h2>الترتيب</h2></div></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th class="nm">الاسم</th><th>النقط</th><th>مظبوطة</th><th>${lastLabel ? esc(lastLabel) : "آخر جولة"}</th></tr></thead><tbody>${body}</tbody></table></div>
-    <p class="note">لو اتنين متعادلين في النقط، اللي جاب نتايج مظبوطة أكتر بيبقى قدام.</p>`);
+    <p class="note">لو اتنين متعادلين في النقط، اللي جاب نتايج مظبوطة أكتر بيبقى قدام، ولو لسه متعادلين فاللي عنده نجوم أكتر.<br>⭐ نجم جولة (والرقم عدد المرات) · 🚀 صاروخ ${esc(awardsLabel || "آخر جولة")}</p>`);
 }
 
 /* ---------- account ---------- */
@@ -583,7 +615,7 @@ function installCard() {
 
 function meView() {
   const p = me();
-  const role = isOwner() ? `<span class="chip dbl">المشرف</span>` : "";
+  const role = isMain() ? `<span class="chip dbl">المشرف</span>` : isOwner() ? `<span class="chip dbl">مشرف</span>` : "";
   const ownerNote = isOwner() ? `<p class="hint">لو غيّرت الباسورد، غيّره كمان في GitHub ← Settings ← Secrets ← <span dir="ltr">ADMIN_PASS</span>، عشان التحديث التلقائي يفضل شغّال.</p>` : "";
   const pf = (k, label, ac) => `<div class="field"><label for="${k}">${label}</label><input class="inp" id="${k}" type="password" autocomplete="${ac}" data-k="${k}" data-keep value="${esc(S.form[k] || "")}" required></div>`;
   return card(`<div class="card-h"><div><span class="eyebrow">حسابك</span><h2>${esc(p.name)}</h2></div>${role}</div>
@@ -684,7 +716,22 @@ function arm(key) {
 }
 
 function adminView() {
-  return syncCard() + seedCard() + playersCard() + roundToolsCard();
+  return syncCard() + adminsCard() + seedCard() + playersCard() + roundToolsCard();
+}
+
+function adminsCard() {
+  if (!isMain()) return "";
+  const admins = (S.owner && S.owner.admins) || [];
+  const byUid = new Map(playerList().filter((p) => p.uid).map((p) => [p.uid, p]));
+  const rows = admins.map((uid) => `<div class="prow-h"><b>${esc(byUid.has(uid) ? byUid.get(uid).name : "حساب مش موجود")}</b>
+    <button type="button" class="link danger" data-act="adm-rm" data-uid="${esc(uid)}">${armed(`rm:${uid}`) ? "دوس تاني للتأكيد" : "شيله"}</button></div>`).join("");
+  const cands = playerList().filter((p) => p.uid && p.uid !== S.owner.uid && !admins.includes(p.uid));
+  const pick = S.form["adm-new"] || "";
+  return card(`<div class="card-h"><div><span class="eyebrow">انت المشرف الأساسي</span><h2>المشرفين</h2></div></div>
+    <p class="muted sm">اللي تضيفه يقدر يعمل كل حاجة في الإدارة، ما عدا إنه يضيف أو يشيل مشرفين. ومحدش، ولا انت، بيشوف توقعات حد قبل القفل.</p>
+    ${rows ? `<div class="stack">${rows}</div>` : ""}
+    ${cands.length ? `<div class="field"><label for="adm-new">ضيف مشرف (لازم يكون سجّل في التطبيق)</label><select class="inp" id="adm-new" data-k="adm-new"><option value="">اختار</option>${cands.map((p) => `<option value="${esc(p.uid)}"${p.uid === pick ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select></div>
+      <div class="actions"><button type="button" class="btn sm" data-act="adm-add">خليه مشرف</button></div>` : `<p class="hint">مفيش حد مسجّل تقدر تضيفه دلوقتي.</p>`}`);
 }
 
 function syncCard() {
@@ -742,6 +789,18 @@ function playersCard() {
   return card(`<div class="card-h"><div><span class="eyebrow">${list.length} لاعب</span><h2>اللاعيبة</h2></div></div><div>${rows}</div>`);
 }
 
+// Late entry choices: which matches count, whether the double counts, whether to show "late".
+function lateState(r, fpid) {
+  const a = (r.adj || {})[fpid];
+  const pick = (k, d) => (S.form[k] !== undefined ? S.form[k] === "1" : d);
+  return {
+    counts: (m) => pick(`fc|${r.id}|${m.id}`, a ? !(a.skip || []).map(String).includes(String(m.id)) : !(m.ko <= now())),
+    dbl: pick(`fdbl|${r.id}`, a ? !a.noDbl : false),
+    mark: pick(`fmark|${r.id}`, a ? !!a.mark : true),
+  };
+}
+const clearFriendForm = () => { for (const k of Object.keys(S.form)) if (/^(f|fc|fdbl|fmark)\|/.test(k)) delete S.form[k]; };
+
 function roundToolsCard() {
   const rounds = compRounds(S.comp).sort((a, b) => (a.first || a.lock) - (b.first || b.lock));
   if (!rounds.length) return "";
@@ -765,12 +824,18 @@ function roundToolsCard() {
   let friend = "";
   if (fpid) {
     const prev = locked && S.preds[rid] && S.preds[rid][fpid] ? S.preds[rid][fpid].picks || {} : {};
+    const ls = lateState(r, fpid);
     friend = `<div class="mlist">${r.matches.map((m) => {
       const pv = Array.isArray(prev[m.id]) ? prev[m.id] : [];
       const c0 = { v: val(`f|${rid}|${m.id}|0`, C.isGoal(pv[0]) ? pv[0] : ""), dirty: false, saved: false };
       const c1 = { v: val(`f|${rid}|${m.id}|1`, C.isGoal(pv[1]) ? pv[1] : ""), dirty: false, saved: false };
-      return `<div class="m"><div class="mrow"><div class="${teamCls("home", m.h)}" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("f", rid, m, 0, c0)}<span class="dash">-</span>${scoreBox("f", rid, m, 1, c1)}</div><div class="${teamCls("away", m.a)}" lang="en">${esc(m.a)}</div></div></div>`;
+      const counts = locked ? `<label class="toggle-row sm"><span>يتحسب له${m.ko <= now() ? " (الماتش بدأ)" : ""}</span><input type="checkbox" data-k="fc|${esc(rid)}|${esc(m.id)}"${ls.counts(m) ? " checked" : ""}></label>` : "";
+      return `<div class="m"><div class="mrow"><div class="${teamCls("home", m.h)}" lang="en">${esc(m.h)}</div><div class="scores">${scoreBox("f", rid, m, 0, c0)}<span class="dash">-</span>${scoreBox("f", rid, m, 1, c1)}</div><div class="${teamCls("away", m.a)}" lang="en">${esc(m.a)}</div></div>${counts}</div>`;
     }).join("")}</div>
+    ${locked ? `<div class="late-box">
+      <label class="toggle-row"><span>الدابل يتحسب له</span><input type="checkbox" data-k="fdbl|${esc(rid)}"${ls.dbl ? " checked" : ""}></label>
+      <label class="toggle-row"><span>يبان "متأخر" جنب اسمه</span><input type="checkbox" data-k="fmark|${esc(rid)}"${ls.mark ? " checked" : ""}></label>
+      <p class="hint">الجولة قفلت، فده توقع متأخر: الماتشات اللي بدأت مش هتتحسب له، والدابل مش هيتحسب له. غيّر العلامات لو اتفقتوا على غير كده.</p></div>` : ""}
     <div class="paste"><label class="eyebrow" for="friend-paste">أو الصق توقعاته</label><textarea class="inp" id="friend-paste" data-k="friend-paste" data-keep rows="4">${esc(S.form["friend-paste"] || "")}</textarea>
       <div class="actions"><button type="button" class="btn ghost sm" data-act="adm-friend-paste">املا</button></div></div>
     <div class="actions"><button type="button" class="btn" data-act="adm-friend-save">احفظ توقعات ${esc(nameOf(fpid))}</button></div>
@@ -819,6 +884,56 @@ async function seedSave() {
   });
   try { await F.batch(ops); S.adm.seed = null; S.adm.seedBad = []; S.form.seed = ""; toast(`اتحفظ ✓ ${rows.length} لاعب`); render(); }
   catch (e) { toast(errText(e), true); }
+}
+
+/* ---------- share the round's star as a picture ---------- */
+
+async function shareRound(rid) {
+  const r = roundById(rid);
+  if (!r) return;
+  const preds = S.preds[rid] || (await loadPreds(rid).catch(() => ({})));
+  const pts = C.roundPoints(r, preds);
+  const { top, rocket, hit } = roundAwards(r, pts, preds);
+  if (!top) return toast("مفيش نجم للجولة دي", true);
+  try { await document.fonts.ready; } catch { /* fonts optional */ }
+  const W = 1080, c = document.createElement("canvas");
+  c.width = W; c.height = W;
+  const g = c.getContext("2d");
+  g.fillStyle = "#0F4A34"; g.fillRect(0, 0, W, W);
+  g.fillStyle = "rgba(255,255,255,0.04)";
+  for (let i = 0; i < 8; i += 2) g.fillRect((i * W) / 8, 0, W / 8, W);
+  g.strokeStyle = "rgba(240,246,241,0.2)"; g.lineWidth = 4; g.strokeRect(60, 60, W - 120, W - 120);
+  g.direction = "rtl"; g.textAlign = "center"; g.textBaseline = "middle";
+  const FONT = '"Alexandria", "Noto Sans Arabic", sans-serif';
+  const line = (txt, y, size, weight, color) => {
+    let px = size;
+    g.font = `${weight} ${px}px ${FONT}`;
+    while (g.measureText(txt).width > W - 200 && px > 20) { px -= 2; g.font = `${weight} ${px}px ${FONT}`; }
+    g.fillStyle = color; g.fillText(txt, W / 2, y);
+  };
+  line("دوري التوقعات", 150, 56, 800, "#F0F6F1");
+  line(`${COMPS[r.comp].short} · ${r.label}`, 228, 38, 500, "#B5CFBE");
+  line("⭐ نجم الجولة ⭐", 370, 46, 700, "#F5E5B2");
+  line(names(top.pids), 480, 100, 800, "#FFFFFF");
+  line(`${ptsWord(top.p)} · ${top.x} مظبوطة`, 580, 42, 500, "#F0F6F1");
+  let y = 710;
+  if (rocket) { line(`🚀 الصاروخ: ${names(rocket.pids)}، طلع ${placesWord(rocket.up)}`, y, 38, 600, "#F0F6F1"); y += 95; }
+  if (hit) { line(`🎯 أحلى توقعة: ${names(hit.pids)} جاب \u2066${hit.m.hg}-${hit.m.ag}\u2069`, y, 34, 500, "#B5CFBE"); line(`${hit.m.h} - ${hit.m.a}`, y + 55, 32, 500, "#B5CFBE"); }
+  line(location.host, 965, 30, 400, "#B5CFBE");
+  const blob = await new Promise((res) => c.toBlob(res, "image/png"));
+  if (!blob) return toast("مقدرتش أعمل الصورة", true);
+  const file = new File([blob], `star-${r.id}.png`, { type: "image/png" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], text: `⭐ نجم ${COMPS[r.comp].short} ${r.label}: ${names(top.pids)}` });
+      return;
+    }
+  } catch (e) { if (e && e.name === "AbortError") return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast("الصورة اتنزلت، ابعتها للجروب");
 }
 
 /* ---------- events ---------- */
@@ -914,6 +1029,21 @@ const ACTS = {
     if (!r) return;
     try { await saveRoundMatches(r, r.matches); toast("النقط اتحسبت ✓"); } catch (e) { toast(errText(e), true); }
   },
+  "share": (el) => shareRound(el.dataset.rid),
+  "adm-add": async () => {
+    const uid = S.form["adm-new"];
+    if (!uid) return toast("اختار حد الأول", true);
+    try {
+      await F.patch("config/owner", { admins: [...new Set([...((S.owner && S.owner.admins) || []), uid])] });
+      S.form["adm-new"] = ""; toast("بقى مشرف ✓");
+    } catch (e) { toast(errText(e), true); }
+  },
+  "adm-rm": async (el) => {
+    const uid = el.dataset.uid;
+    if (!arm(`rm:${uid}`)) return;
+    try { await F.patch("config/owner", { admins: ((S.owner && S.owner.admins) || []).filter((u) => u !== uid) }); toast("اتشال من المشرفين"); }
+    catch (e) { toast(errText(e), true); }
+  },
   "adm-friend-paste": () => {
     const r = roundById(S.adm.rid);
     if (!r) return;
@@ -943,10 +1073,12 @@ const ACTS = {
         { op: "put", path: `rounds/${r.id}/subs/${fpid}`, data: { n, at: F.SERVER_TIME } },
       ]);
       if (locked) {
+        const ls = lateState(r, fpid);
+        const adj = { ...(r.adj || {}), [fpid]: { late: now(), skip: r.matches.filter((m) => !ls.counts(m)).map((m) => String(m.id)), noDbl: !ls.dbl, mark: ls.mark } };
         const preds = { ...(await loadPreds(r.id)), [fpid]: { picks } };
-        await F.patch(`rounds/${r.id}`, { points: C.roundPoints(r, preds) });
+        await F.patch(`rounds/${r.id}`, { adj, points: C.roundPoints({ ...r, adj }, preds) });
       }
-      for (const k of Object.keys(S.form)) if (k.startsWith("f|")) delete S.form[k];
+      clearFriendForm();
       toast(`اتحفظ ✓ ${n} ماتش لـ ${nameOf(fpid)}`);
       render();
     } catch (e) { toast(errText(e), true); }
@@ -963,10 +1095,11 @@ document.addEventListener("click", (e) => {
 document.addEventListener("change", (e) => {
   const el = e.target;
   if (el.tagName === "INPUT" && el.type === "checkbox" && el.dataset.act) { const fn = ACTS[el.dataset.act]; if (fn) fn(el, e); return; }
+  if (el.tagName === "INPUT" && el.type === "checkbox" && el.dataset.k) { S.form[el.dataset.k] = el.checked ? "1" : "0"; return; }
   if (el.tagName !== "SELECT" || !el.dataset.k) return;
   S.form[el.dataset.k] = el.value;
-  if (el.dataset.k === "adm-rid") { S.adm.rid = el.value; for (const k of Object.keys(S.form)) if (k.startsWith("f|") || k.startsWith("r|")) delete S.form[k]; }
-  if (el.dataset.k === "adm-friend") for (const k of Object.keys(S.form)) if (k.startsWith("f|")) delete S.form[k];
+  if (el.dataset.k === "adm-rid") { S.adm.rid = el.value; clearFriendForm(); for (const k of Object.keys(S.form)) if (k.startsWith("r|")) delete S.form[k]; }
+  if (el.dataset.k === "adm-friend") clearFriendForm();
   render();
 });
 
