@@ -19,5 +19,5 @@ export const VAPID_PUBLIC = "BFEvJdE5gjui-vHF7JH-i6X_O75ZorPE_ecM6O5RbQuyPnxWgq-
 // doubles: one random match per match day counts twice, revealed after the deadline.
 export const COMPS = {
   PL: { fd: "PL", name: "الدوري الإنجليزي", short: "الإنجليزي", startRound: 12 },
-  UCL: { fd: "CL", name: "دوري أبطال أوروبا", short: "الأبطال", startRound: 6, doubles: true },
+  UCL: { fd: "CL", name: "دوري أبطال أوروبا", short: "الأبطال", startRound: 5, doubles: true },
 };
